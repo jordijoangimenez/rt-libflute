@@ -167,7 +167,7 @@ auto main(int argc, char **argv) -> int {
     }
 
     // Create a Boost io_service
-    boost::asio::io_service io;
+    boost::asio::io_context io;
 
     // Construct the transmitter class
     LibFlute::Transmitter transmitter(

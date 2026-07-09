@@ -138,7 +138,7 @@ auto main(int argc, char **argv) -> int {
 
   try {
     // Create a Boost io_service
-    boost::asio::io_service io;
+    boost::asio::io_context io;
 
     // Create the receiver
     LibFlute::Receiver receiver(
