@@ -46,7 +46,7 @@ namespace LibFlute {
       */
       Receiver( const std::string& iface, const std::string& address, 
           short port, uint64_t tsi,
-          boost::asio::io_service& io_service);
+          boost::asio::io_context& io_service);
 
      /**
       *  Default destructor.

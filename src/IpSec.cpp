@@ -94,10 +94,8 @@ namespace LibFlute::IpSec {
     xsinfo.family = AF_INET;
     xsinfo.mode = XFRM_MODE_TRANSPORT;
 
-    struct {
-      struct xfrm_algo xa;
-      char buf[512];
-    } algo = {};
+    std::vector<char> algo_buf(sizeof(struct xfrm_algo) + 512, 0);
+    auto* algo = reinterpret_cast<struct xfrm_algo*>(algo_buf.data());
 
     std::vector<char> binary_key;
     for (unsigned int i = 0; i < key.length(); i += 2) {
@@ -106,13 +104,13 @@ namespace LibFlute::IpSec {
     if (binary_key.size() > 512) {
       throw "Key is too long";
     }
-    strcpy(algo.xa.alg_name, "aes");
-    algo.xa.alg_key_len = binary_key.size() * 8;
-    memcpy(algo.buf, &binary_key[0], binary_key.size());
+    strcpy(algo->alg_name, "aes");
+    algo->alg_key_len = binary_key.size() * 8;
+    memcpy(algo->alg_key, &binary_key[0], binary_key.size());
 
     msg = nlmsg_alloc_simple(XFRM_MSG_NEWSA, 0);
     nlmsg_append(msg, &xsinfo, sizeof(xsinfo), NLMSG_ALIGNTO);
-    nla_put(msg, XFRMA_ALG_CRYPT, sizeof(algo), &algo);
+    nla_put(msg, XFRMA_ALG_CRYPT, algo_buf.size(), algo);
 
     sk = nl_socket_alloc();
     nl_connect(sk, NETLINK_XFRM);

@@ -23,8 +23,8 @@
 #include "IpSec.h"
 LibFlute::Transmitter::Transmitter ( const std::string& address,
     short port, uint64_t tsi, unsigned short mtu, uint32_t rate_limit,
-    boost::asio::io_service& io_service)
-    : _endpoint(boost::asio::ip::address::from_string(address), port)
+    boost::asio::io_context& io_service)
+    : _endpoint(boost::asio::ip::make_address(address), port)
     , _socket(io_service, _endpoint.protocol())
     , _fdt_timer(io_service)
     , _send_timer(io_service)
@@ -47,7 +47,7 @@ LibFlute::Transmitter::Transmitter ( const std::string& address,
   _fec_oti = FecOti{FecScheme::CompactNoCode, 0, _max_payload, max_source_block_length};
   _fdt = std::make_unique<FileDeliveryTable>(1, _fec_oti);
 
-  _fdt_timer.expires_from_now(boost::posix_time::seconds(_fdt_repeat_interval));
+  _fdt_timer.expires_after(std::chrono::seconds(_fdt_repeat_interval));
   _fdt_timer.async_wait( boost::bind(&Transmitter::fdt_send_tick, this));
 
   send_next_packet();
@@ -117,7 +117,7 @@ auto LibFlute::Transmitter::send(
 auto LibFlute::Transmitter::fdt_send_tick() -> void
 {
   send_fdt();
-  _fdt_timer.expires_from_now(boost::posix_time::seconds(_fdt_repeat_interval));
+  _fdt_timer.expires_after(std::chrono::seconds(_fdt_repeat_interval));
   _fdt_timer.async_wait( boost::bind(&Transmitter::fdt_send_tick, this));
 }
 
@@ -173,16 +173,16 @@ auto LibFlute::Transmitter::send_next_packet() -> void
     }
   } 
   if (!bytes_queued) {
-    _send_timer.expires_from_now(boost::posix_time::milliseconds(10));
+    _send_timer.expires_after(std::chrono::milliseconds(10));
     _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
   } else {
     if (_rate_limit == 0) {
-      _io_service.post(boost::bind(&Transmitter::send_next_packet, this));
+      boost::asio::post(_io_service, boost::bind(&Transmitter::send_next_packet, this));
     } else {
       auto send_duration = ((bytes_queued * 8.0) / (double)_rate_limit/1000.0) * 1000.0 * 1000.0;
       spdlog::debug("Rate limiter: queued {} bytes, limit {} kbps, next send in {} us", 
           bytes_queued, _rate_limit, send_duration);
-      _send_timer.expires_from_now(boost::posix_time::microseconds(
+      _send_timer.expires_after(std::chrono::microseconds(
             static_cast<int>(ceil(send_duration))));
       _send_timer.async_wait( boost::bind(&Transmitter::send_next_packet, this));
     }

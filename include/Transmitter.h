@@ -51,7 +51,7 @@ namespace LibFlute {
       Transmitter( const std::string& address, 
           short port, uint64_t tsi, unsigned short mtu,
           uint32_t rate_limit,
-          boost::asio::io_service& io_service);
+          boost::asio::io_context& io_service);
 
      /**
       *  Default destructor.
@@ -109,9 +109,9 @@ namespace LibFlute {
       void handle_send_to(const boost::system::error_code& error);
       boost::asio::ip::udp::socket _socket;
       boost::asio::ip::udp::endpoint _endpoint;
-      boost::asio::io_service& _io_service;
-      boost::asio::deadline_timer _send_timer;
-      boost::asio::deadline_timer _fdt_timer;
+      boost::asio::io_context& _io_service;
+      boost::asio::steady_timer _send_timer;
+      boost::asio::steady_timer _fdt_timer;
 
       uint64_t _tsi;
       uint16_t _mtu;
