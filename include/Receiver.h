@@ -97,6 +97,10 @@ namespace LibFlute {
       char _data[max_length];
       uint64_t _tsi;
       std::unique_ptr<LibFlute::FileDeliveryTable> _fdt;
+      // FDT instance currently being reassembled at TOI 0 (0xFFFFFFFF = none).
+      // Used to discard a partial FDT object when a newer instance starts
+      // arriving, so two instances never splice into one corrupt buffer.
+      uint32_t _fdt_in_progress_instance_id = 0xFFFFFFFF;
       std::map<uint64_t, std::shared_ptr<LibFlute::File>> _files;
       std::mutex _files_mutex;
       std::string _mcast_address;
