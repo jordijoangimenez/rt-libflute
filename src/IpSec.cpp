@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stdexcept>
 #include <string>
 #include <cstring>
 #include <iostream>
@@ -100,7 +101,7 @@ namespace LibFlute::IpSec {
       binary_key.emplace_back((char)strtol(key.substr(i, 2).c_str(), nullptr, 16));
     }
     if (binary_key.size() > 512) {
-      throw "Key is too long";
+      throw std::runtime_error("Key is too long");
     }
     size_t algo_size = sizeof(struct xfrm_algo) + binary_key.size();
     void *algo_mem = std::malloc(algo_size);
