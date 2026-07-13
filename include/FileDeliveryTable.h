@@ -1,6 +1,7 @@
 // libflute - FLUTE/ALC library
 //
 // Copyright (C) 2021 Klaus Kühnhammer (Österreichische Rundfunksender GmbH & Co KG)
+//               2025 British Broadcasting Corporation (David Waring <david.waring2@bbc.co.uk>)
 //
 // Licensed under the License terms and conditions for use, reproduction, and
 // distribution of 5G-MAG software (the “License”).  You may not use this file
@@ -9,13 +10,14 @@
 // agreed to in writing, software distributed under the License is distributed on
 // an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied.
-// 
+//
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <optional>
 #include <string>
 #include <vector>
 #include "flute_types.h"
@@ -27,12 +29,24 @@ namespace LibFlute {
   class FileDeliveryTable {
     public:
      /**
+      * FDT namespace enumeration
+      */
+      enum FdtNamespace {
+          FDT_NS_NONE = 0,
+          FDT_NS_RFC3926,
+          FDT_NS_DRAFT_2005,
+//          FDT_NS_RFC6726, // FLUTE v2 - will need other things implementing to use this correctly
+          FDT_NS_3GPP_CONSOLIDATED_V2
+      };
+
+     /**
       *  Create an empty FDT
       *
       *  @param instance_id FDT instance ID to set
       *  @param fec_oti Global FEC OTI parameters
+      *  @param fdt_namespace The XML namespace to use for FDT
       */
-      FileDeliveryTable(uint32_t instance_id, FecOti fec_oti);
+      FileDeliveryTable(uint32_t instance_id, FecOti fec_oti, FdtNamespace fdt_namespace = FDT_NS_NONE);
 
      /**
       *  Parse an XML string and create a FDT class from it
@@ -64,6 +78,15 @@ namespace LibFlute {
         std::string content_type;
         uint64_t expires;
         FecOti fec_oti;
+        struct {
+          bool no_cache;
+          std::optional<uint64_t> cache_expires;
+        } cache_control;
+        std::string content_encoding;
+        std::string etag;
+
+        bool operator==(const FileEntry &other) const;
+        bool operator!=(const FileEntry &other) const { return !(*this == other); };
       };
 
      /**
@@ -89,14 +112,24 @@ namespace LibFlute {
      /**
       *  Get all current file entries
       */
-      std::vector<FileEntry> file_entries() { return _file_entries; };
+      const std::vector<FileEntry> &file_entries() const {
+        return _file_entries;
+      };
+
+     /**
+      * Mark instance sent
+      */
+      void sent() { _instance_id_sent = _instance_id; };
 
     private:
       uint32_t _instance_id;
+      uint32_t _instance_id_sent;
 
       std::vector<FileEntry> _file_entries;
       FecOti _global_fec_oti;
 
       uint64_t _expires;
+
+      FdtNamespace _fdt_namespace;
   };
 };
