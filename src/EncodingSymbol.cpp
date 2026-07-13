@@ -13,23 +13,25 @@
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include <stdexcept>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <cmath>
 #include <arpa/inet.h>
 #include "EncodingSymbol.h"
+#include "spdlog/spdlog.h"
 
-auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len, const FecOti& fec_oti, ContentEncoding encoding) -> std::vector<EncodingSymbol> 
+auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len, const FecOti& fec_oti, ContentEncoding encoding) -> std::vector<EncodingSymbol>
 {
   auto source_block_number = 0;
   auto encoding_symbol_id = 0;
   std::vector<EncodingSymbol> symbols;
 
-  if (encoding != ContentEncoding::NONE) {
-    throw "Only unencoded content is supported";
+  if (encoding != ContentEncoding::NONE && encoding != ContentEncoding::GZIP) {
+    throw std::runtime_error("Only unencoded or gzipped content is supported");
   }
-  
+
   if (fec_oti.encoding_id == FecScheme::CompactNoCode) {
     source_block_number = ntohs(*(uint16_t*)encoded_data);
     encoded_data += 2;
@@ -37,7 +39,7 @@ auto LibFlute::EncodingSymbol::from_payload(char* encoded_data, size_t data_len,
     encoded_data += 2;
     data_len -= 4;
   } else {
-    throw "Only compact no-code FEC is supported";
+    throw std::runtime_error("Only compact no-code FEC is supported");
   }
 
   int nof_symbols = std::ceil((float)data_len / (float)fec_oti.encoding_symbol_length);
@@ -57,22 +59,26 @@ auto LibFlute::EncodingSymbol::to_payload(const std::vector<EncodingSymbol>& sym
   size_t len = 0;
   auto ptr = encoded_data;
   auto first_symbol = symbols.begin();
-  if (fec_oti.encoding_id == FecScheme::CompactNoCode) {
+  if (fec_oti.encoding_id == FecScheme::CompactNoCode && data_len >= 4) {
     *((uint16_t*)ptr) = htons(first_symbol->source_block_number());
     ptr += 2;
     *((uint16_t*)ptr) = htons(first_symbol->id());
     ptr += 2;
     len += 4;
+    data_len -= 4;
   } else {
-    throw "Only compact no-code FEC is supported";
+    throw std::runtime_error("Only compact no-code FEC is supported");
   }
 
   for (const auto& symbol : symbols) {
     if (symbol.len() <= data_len) {
       auto symbol_len = symbol.encode_to(ptr, data_len);
       data_len -= symbol_len;
-      encoded_data += symbol_len;
       len += symbol_len;
+      ptr += symbol_len;
+    } else {
+      spdlog::warn("Not enough space in payload buffer for encoding symbol");
+      break;
     }
   }
   return len;

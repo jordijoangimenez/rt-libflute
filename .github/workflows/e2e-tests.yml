@@ -1,0 +1,51 @@
+name: End-to-End Tests
+
+on:
+  pull_request:
+    branches: [development]
+
+concurrency:
+  group: e2e-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & E2E Test (Ubuntu)
+    runs-on: ubuntu-latest
+    env:
+      CTEST_OUTPUT_ON_FAILURE: 1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build build-essential cmake \
+            libboost-all-dev libspdlog-dev libtinyxml2-dev libconfig++-dev \
+            libssl-dev libnl-3-dev zlib1g-dev ccache clang-tidy clang g++-12
+
+      - name: Configure (CMake)
+        run: |
+          cmake -S . -B build -GNinja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: List end-to-end tests (debug)
+        run: ctest --test-dir build/tests -N -R '^e2e:'
+
+      - name: Run end-to-end tests
+        run: |
+          set -o pipefail
+          ctest --test-dir build/tests -R '^e2e:' --output-on-failure --verbose -j 1 | tee build/ctest-e2e-log.txt
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-e2e-log
+          path: build/ctest-e2e-log.txt
+          if-no-files-found: warn

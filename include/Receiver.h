@@ -9,7 +9,7 @@
 // agreed to in writing, software distributed under the License is distributed on
 // an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied.
-// 
+//
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
@@ -40,13 +40,13 @@ namespace LibFlute {
       *
       *  @param iface Address of the (local) interface to bind the receiving socket to. 0.0.0.0 = any.
       *  @param address Multicast address
-      *  @param port Target port 
-      *  @param tsi TSI value of the session 
-      *  @param io_service Boost io_service to run the socket operations in (must be provided by the caller)
+      *  @param port Target port
+      *  @param tsi TSI value of the session
+      *  @param io_context Boost io_context to run the socket operations in (must be provided by the caller)
       */
-      Receiver( const std::string& iface, const std::string& address, 
+      Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
-          boost::asio::io_context& io_service);
+          boost::asio::io_context& io_context);
 
      /**
       *  Default destructor.
@@ -97,6 +97,10 @@ namespace LibFlute {
       char _data[max_length];
       uint64_t _tsi;
       std::unique_ptr<LibFlute::FileDeliveryTable> _fdt;
+      // FDT instance currently being reassembled at TOI 0 (0xFFFFFFFF = none).
+      // Used to discard a partial FDT object when a newer instance starts
+      // arriving, so two instances never splice into one corrupt buffer.
+      uint32_t _fdt_in_progress_instance_id = 0xFFFFFFFF;
       std::map<uint64_t, std::shared_ptr<LibFlute::File>> _files;
       std::mutex _files_mutex;
       std::string _mcast_address;

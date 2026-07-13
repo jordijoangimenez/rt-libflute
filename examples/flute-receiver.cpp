@@ -9,11 +9,13 @@
 // agreed to in writing, software distributed under the License is distributed on
 // an “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied.
-// 
+//
 // See the License for the specific language governing permissions and limitations
 // under the License.
 //
 #include <cstdio>
+#include <cstring>
+#include <cerrno>
 #include <iostream>
 #include <argp.h>
 
@@ -52,6 +54,8 @@ static struct argp_option options[] = {  // NOLINT
      "Log verbosity: 0 = trace, 1 = debug, 2 = info, 3 = warn, 4 = error, 5 = "
      "critical, 6 = none. Default: 2.",
      0},
+    {"tsi", 'T', "ID", 0, "The TSI to use for the FLUTE session (default: 16)", 0},
+    {"output-path", 'o', "PATH", 0, "Directory to save received files", 0},
     {nullptr, 0, nullptr, 0, nullptr, 0}};
 
 /**
@@ -65,6 +69,8 @@ struct ft_arguments {
   unsigned short mcast_port = 40085;
   unsigned log_level = 2;        /**< log level */
   char **files;
+  uint64_t tsi = 16;
+  const char *output_path = nullptr;
 };
 
 /**
@@ -89,6 +95,12 @@ static auto parse_opt(int key, char *arg, struct argp_state *state) -> error_t {
     case 'l':
       arguments->log_level = static_cast<unsigned>(strtoul(arg, nullptr, 10));
       break;
+    case 'T':
+      arguments->tsi = static_cast<uint64_t>(strtoul(arg, nullptr, 10));
+      break;
+    case 'o':
+      arguments->output_path = arg;
+      break;
     default:
       return ARGP_ERR_UNKNOWN;
   }
@@ -111,7 +123,7 @@ void print_version(FILE *stream, struct argp_state * /*state*/) {
 
 /**
  *  Main entry point for the program.
- *  
+ *
  * @param argc  Command line agument count
  * @param argv  Command line arguments
  * @return 0 on clean exit, -1 on failure
@@ -137,7 +149,7 @@ auto main(int argc, char **argv) -> int {
   spdlog::info("FLUTE receiver demo starting up");
 
   try {
-    // Create a Boost io_service
+    // Create a Boost io_context
     boost::asio::io_context io;
 
     // Create the receiver
@@ -145,23 +157,41 @@ auto main(int argc, char **argv) -> int {
         arguments.flute_interface,
         arguments.mcast_target,
         (short)arguments.mcast_port,
-        16,
+        arguments.tsi,
         io);
 
     // Configure IPSEC, if enabled
-    if (arguments.enable_ipsec) 
+    if (arguments.enable_ipsec)
     {
       receiver.enable_ipsec(1, arguments.aes_key);
     }
 
     receiver.register_completion_callback(
-        [](std::shared_ptr<LibFlute::File> file) { //NOLINT
+      [output_path = arguments.output_path](std::shared_ptr<LibFlute::File> file) { //NOLINT
+        std::string out_file = file->meta().content_location;
+        if (output_path && std::strlen(output_path) > 0) {
+          out_file = (std::filesystem::path(output_path) / std::filesystem::path(out_file).filename()).string();
+        }
+
         spdlog::info("{} (TOI {}) has been received",
-            file->meta().content_location, file->meta().toi);
-        FILE* fd = fopen(file->meta().content_location.c_str(), "wb");
+                     out_file, file->meta().toi);
+        // content_location is a URL path (e.g. "out/u/bbb/qxa/manifest.m3u8")
+        // and its directory component doesn't necessarily exist relative to
+        // the current working directory - create it first, and don't
+        // dereference a null FILE* if fopen() still fails (e.g. content
+        // path with characters invalid in a filename, such as a "?query").
+        std::filesystem::path out_path(out_file);
+        if (out_path.has_parent_path()) {
+          std::filesystem::create_directories(out_path.parent_path());
+        }
+        FILE *fd = fopen(out_file.c_str(), "wb");
+        if (!fd) {
+          spdlog::warn("Failed to open {} for writing: {}", out_file, strerror(errno));
+          return;
+        }
         fwrite(file->buffer(), 1, file->length(), fd);
         fclose(fd);
-        });
+      });
 
     // Start the IO service
     io.run();
