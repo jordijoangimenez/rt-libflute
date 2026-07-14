@@ -93,7 +93,18 @@ namespace LibFlute {
       boost::asio::ip::udp::socket _socket;
       boost::asio::ip::udp::endpoint _sender_endpoint;
 
-      enum { max_length = 2048 };
+      // Must hold the largest UDP datagram that can actually arrive: with the
+      // Compact No-Code FEC scheme, a packet is a 4-byte SBN+ID header plus one
+      // full encoding symbol, and FEC-OTI-Encoding-Symbol-Length is a per-session
+      // configuration value with no fixed small upper bound (e.g. large symbols
+      // sized close to the path MTU, or, as over loopback/jumbo-capable links,
+      // sized close to the max IPv4 UDP payload). A too-small buffer here doesn't
+      // error out -- recvfrom() on a datagram socket silently truncates to
+      // whatever fits, so every symbol beyond that size is completed with
+      // whatever partial prefix arrived, and the truncation is invisible until a
+      // Content-MD5 check (if present in the FDT) catches the corruption. 65536
+      // covers the maximum possible IPv4 UDP payload (65507 bytes) with margin.
+      enum { max_length = 65536 };
       char _data[max_length];
       uint64_t _tsi;
       std::unique_ptr<LibFlute::FileDeliveryTable> _fdt;
