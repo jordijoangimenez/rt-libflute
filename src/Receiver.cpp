@@ -15,15 +15,19 @@
 //
 #include "Receiver.h"
 #include "AlcPacket.h"
+#include <cerrno>
+#include <cstring>
 #include <iostream>
 #include <string>
+#include <netinet/in.h>
 #include "spdlog/spdlog.h"
 #include "IpSec.h"
 
 
 LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& address,
     short port, uint64_t tsi,
-    boost::asio::io_context& io_context)
+    boost::asio::io_context& io_context,
+    const std::string& source_address)
     : _socket(io_context)
     , _tsi(tsi)
     , _mcast_address(address)
@@ -45,22 +49,58 @@ LibFlute::Receiver::Receiver ( const std::string& iface, const std::string& addr
     _socket.set_option(boost::asio::socket_base::receive_buffer_size(16*1024*1024));
     _socket.bind(listen_endpoint);
 
-    // Join the multicast group on the specific interface passed in - the
-    // single-address join_group() overload ignores `iface` entirely and
-    // joins via whatever interface the system considers the default route
-    // for the group, which silently breaks reception when the content
-    // actually arrives on a non-default interface (e.g. the modem's own
-    // TUN device rather than a physical NIC).
-    _socket.set_option(
-        boost::asio::ip::multicast::join_group(
-          boost::asio::ip::make_address(address).to_v4(),
-          boost::asio::ip::make_address(iface).to_v4()));
+    if (!source_address.empty()) {
+      // Source-specific multicast (SSM, RFC 4607): admits only packets from source_address,
+      // as indicated by an SDP a=source-filter line (RFC 4570; TS 26.517 cl.6.2.2.3's own
+      // examples use this for FLUTE sessions). boost::asio has no portable SSM join, so this
+      // goes straight to the socket option Linux (and most other stacks) actually define.
+      // IPv4 only, matching the ASM join_group() call below, which is likewise .to_v4()-only.
+      struct ip_mreq_source mreq_source{};
+      auto mcast_bytes = boost::asio::ip::make_address(address).to_v4().to_bytes();
+      auto src_bytes = boost::asio::ip::make_address(source_address).to_v4().to_bytes();
+      auto iface_bytes = boost::asio::ip::make_address(iface).to_v4().to_bytes();
+      std::memcpy(&mreq_source.imr_multiaddr, mcast_bytes.data(), mcast_bytes.size());
+      std::memcpy(&mreq_source.imr_sourceaddr, src_bytes.data(), src_bytes.size());
+      std::memcpy(&mreq_source.imr_interface, iface_bytes.data(), iface_bytes.size());
 
-    _socket.async_receive_from(
-        boost::asio::buffer(_data, max_length), _sender_endpoint,
-        boost::bind(&LibFlute::Receiver::handle_receive_from, this,
-          boost::asio::placeholders::error,
-          boost::asio::placeholders::bytes_transferred));
+      if (setsockopt(_socket.native_handle(), IPPROTO_IP, IP_ADD_SOURCE_MEMBERSHIP,
+                      &mreq_source, sizeof(mreq_source)) != 0) {
+        spdlog::error("Receiver: IP_ADD_SOURCE_MEMBERSHIP for {} from {} failed: {}", address,
+                      source_address, strerror(errno));
+      } else {
+        spdlog::info("Receiver: joined SSM {} from source {} on iface {}", address,
+                     source_address, iface);
+      }
+    } else {
+      // Join the multicast group on the specific interface passed in - the
+      // single-address join_group() overload ignores `iface` entirely and
+      // joins via whatever interface the system considers the default route
+      // for the group, which silently breaks reception when the content
+      // actually arrives on a non-default interface (e.g. the modem's own
+      // TUN device rather than a physical NIC).
+      _socket.set_option(
+          boost::asio::ip::multicast::join_group(
+            boost::asio::ip::make_address(address).to_v4(),
+            boost::asio::ip::make_address(iface).to_v4()));
+    }
+
+    arm_receive();
+}
+
+LibFlute::Receiver::~Receiver()
+{
+  *_alive = false;
+}
+
+auto LibFlute::Receiver::arm_receive() -> void
+{
+  auto alive = _alive;
+  _socket.async_receive_from(
+      boost::asio::buffer(_data, max_length), _sender_endpoint,
+      [this, alive](const boost::system::error_code& error, size_t bytes_recvd) {
+        if (!*alive) return;
+        handle_receive_from(error, bytes_recvd);
+      });
 }
 
 auto LibFlute::Receiver::enable_ipsec(uint32_t spi, const std::string& key) -> void
@@ -189,11 +229,7 @@ auto LibFlute::Receiver::handle_receive_from(const boost::system::error_code& er
       spdlog::warn("Failed to decode ALC/FLUTE packet: {}", ex);
     }
 
-    _socket.async_receive_from(
-        boost::asio::buffer(_data, max_length), _sender_endpoint,
-        boost::bind(&LibFlute::Receiver::handle_receive_from, this,
-          boost::asio::placeholders::error,
-          boost::asio::placeholders::bytes_transferred));
+    arm_receive();
   }
   else
   {

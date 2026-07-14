@@ -16,6 +16,8 @@
 #pragma once
 #include <boost/asio.hpp>
 #include <boost/bind/bind.hpp>
+#include <atomic>
+#include <memory>
 #include <string>
 #include <map>
 #include <mutex>
@@ -43,15 +45,24 @@ namespace LibFlute {
       *  @param port Target port
       *  @param tsi TSI value of the session
       *  @param io_context Boost io_context to run the socket operations in (must be provided by the caller)
+      *  @param source_address If non-empty, join as source-specific multicast (SSM, IPv4
+      *         only) admitting only packets from this source -- otherwise ASM (any-source).
       */
       Receiver( const std::string& iface, const std::string& address,
           short port, uint64_t tsi,
-          boost::asio::io_context& io_context);
+          boost::asio::io_context& io_context,
+          const std::string& source_address = "");
 
      /**
-      *  Default destructor.
+      *  Destructor. Marks the receiver as no longer alive so that any async_receive_from
+      *  completion already queued on the io_context when this object is destroyed (e.g. the
+      *  owner recreated the receiver, or a caller destroys it mid-flight) finds out before
+      *  touching a freed `this` -- boost::asio only guarantees a cancelled operation's
+      *  handler eventually runs with operation_aborted, not that it runs before the
+      *  destructor returns, so a raw `this`-bound handler left queued past that point would
+      *  otherwise be a use-after-free.
       */
-      virtual ~Receiver() = default;
+      virtual ~Receiver();
 
      /**
       *  Enable IPSEC ESP decryption of FLUTE payloads.
@@ -90,6 +101,7 @@ namespace LibFlute {
 
       void handle_receive_from(const boost::system::error_code& error,
           size_t bytes_recvd);
+      void arm_receive();
       boost::asio::ip::udp::socket _socket;
       boost::asio::ip::udp::endpoint _sender_endpoint;
 
@@ -119,5 +131,9 @@ namespace LibFlute {
       completion_callback_t _completion_cb = nullptr;
 
       bool _running = true;
+
+      // See ~Receiver()'s comment. Copied into each async_receive_from completion handler;
+      // outlives `this` if the receiver is destroyed while a read is in flight.
+      std::shared_ptr<std::atomic<bool>> _alive = std::make_shared<std::atomic<bool>>(true);
   };
 };
