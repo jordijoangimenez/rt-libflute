@@ -656,6 +656,23 @@ namespace LibFlute {
       std::unique_ptr<FileDeliveryTable> _fdt;
       std::map<uint32_t, std::shared_ptr<File>> _files;
       std::mutex _files_mutex;
+      // Backing storage for the FDT's own File object (TOI 0): send_fdt()
+      // builds this from a local std::string whose lifetime must match the
+      // TOI-0 File entry in _files, not just the send_fdt() call that
+      // creates it - File only holds a raw pointer into this string's
+      // buffer, and send_next_packet() reads through that pointer later,
+      // asynchronously, well after send_fdt() would otherwise have returned
+      // and the local string been destroyed. This closes the definite,
+      // always-eventually-triggered dangling-pointer bug; it leaves a much
+      // narrower residual risk if send_fdt() is called again (e.g. from
+      // another file being added/removed) before the previous FDT's own
+      // packets finish sending, since this single buffer would then be
+      // overwritten while an old File's pointer still refers to it. FDT
+      // content is tiny (a handful of file entries' XML) and normally
+      // finishes transmitting well within one _fdt_repeat_interval, so this
+      // is expected to be rare in practice; a fully robust fix would give
+      // each File its own copy or ref-counted storage.
+      std::string _fdt_string_storage;
 
       unsigned _fdt_repeat_interval = 5;
       uint16_t _toi = 1;

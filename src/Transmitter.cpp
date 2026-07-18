@@ -622,15 +622,18 @@ auto Transmitter::seconds_since_epoch() -> uint64_t
 auto Transmitter::send_fdt() -> void {
   if (_fdt->file_entries().empty()) return;
   _fdt->set_expires(seconds_since_epoch() + _fdt_repeat_interval * 2);
-  auto fdt = _fdt->to_string();
+  // Store into the member, not a local - see _fdt_string_storage's own doc
+  // comment: the File below only keeps a raw pointer into this buffer, and
+  // that pointer is read later, asynchronously, by send_next_packet().
+  _fdt_string_storage = _fdt->to_string();
   auto file = std::make_shared<File>(
         0,
         _fec_oti,
         "",
         "",
         seconds_since_epoch() + _fdt_repeat_interval * 2,
-        (char*)fdt.c_str(),
-        fdt.length(),
+        (char*)_fdt_string_storage.c_str(),
+        _fdt_string_storage.length(),
         true);
   if (file) {
     file->set_fdt_instance_id( _fdt->instance_id() );
@@ -757,10 +760,29 @@ auto Transmitter::send_next_packet() -> void
       boost::asio::ip::udp::endpoint send_endpoint;
       char *data = nullptr;
       size_t data_size = 0;
+      // Owns the encapsulated tunnel buffer for tunnel-mode sends (nullptr
+      // otherwise) - must outlive the async_send_to below, not just the call
+      // that starts it. async_send_to() only QUEUES the send and returns
+      // immediately; boost::asio::buffer() wraps data/data_size as a VIEW,
+      // not a copy, so the actual kernel write (driven later by the
+      // io_context) still reads through this pointer. The previous version
+      // called `delete[] data` synchronously right after starting the async
+      // op - a use-after-free race whose outcome depended on allocator/OS
+      // scheduling timing, not a hang or a clean error: sometimes the
+      // buffer survived long enough (small/rare sends, light load) and the
+      // packet went out intact; other times something reused the freed
+      // memory first and the tunnel carried a corrupted (or partially
+      // rewritten) datagram - explaining why large content sessions with
+      // many packets in flight (far more chances to lose the race) never
+      // completed a single file, while small, infrequent SA/announcement
+      // sends mostly got through. Capturing this in the completion handler
+      // below keeps it alive until the actual write finishes.
+      std::shared_ptr<char[]> tunnel_buffer;
       if (_tunnel_endpoint) {
         send_endpoint = _tunnel_endpoint.value();
         data_size = packet->size() + 20 /* IP header */ + 8 /* UDP header */;
-        data = new char[data_size];
+        tunnel_buffer = std::shared_ptr<char[]>(new char[data_size]);
+        data = tunnel_buffer.get();
         create_udp_pkt(data+20, _endpoint, packet->data(), packet->size(), _source_address?_source_address.value():_tunnel_local_address);
         create_ip_hdr(data, _endpoint, data_size, _source_address?_source_address.value():_tunnel_local_address);
       } else {
@@ -770,7 +792,7 @@ auto Transmitter::send_next_packet() -> void
       }
       _socket.async_send_to(
           boost::asio::buffer(data, data_size), send_endpoint,
-          [file, symbols, packet, this](
+          [file, symbols, packet, tunnel_buffer, this](
               const boost::system::error_code& error,
               std::size_t bytes_transferred)
           {
@@ -783,9 +805,6 @@ auto Transmitter::send_next_packet() -> void
               }
             }
           });
-      if (_tunnel_endpoint) {
-        delete[] data;
-      }
     }
   }
   if (_active) {
