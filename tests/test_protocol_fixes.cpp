@@ -765,3 +765,127 @@ TEST(FdtExpiryTest, APastExpiryIsRefusedWhenUnprofiledToo) {
   EXPECT_THROW(fdt.set_expires(1000), std::runtime_error);
   EXPECT_NO_THROW(fdt.set_expires(future_ntp(60)));
 }
+<<<<<<< HEAD
+=======
+
+
+/* A session's channels are what a multiple rate congestion control building block moves a receiver
+   between. RFC 5775 clause 2.1: "An ALC session comprises multiple channels originating at a single
+   sender". The Receiver joined exactly one group for the life of the session; it can now join and
+   leave others on the same interface. Nothing in the library drives this yet. */
+TEST(ReceiverChannelsTest, TheConstructedGroupIsJoined) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.1", 19501, /*tsi*/ 1, io);
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.1"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, AFurtherChannelCanBeJoinedAndLeft) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.2", 19502, /*tsi*/ 1, io);
+
+  EXPECT_TRUE(rx.join_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 1u);
+  EXPECT_EQ(rx.joined_channels().size(), 2u);
+
+  EXPECT_TRUE(rx.leave_channel("239.9.9.3"));
+  EXPECT_EQ(rx.joined_channels().count("239.9.9.3"), 0u);
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+TEST(ReceiverChannelsTest, RedundantJoinsAndLeavesReportNoChange) {
+  boost::asio::io_context io;
+  LibFlute::Receiver rx("0.0.0.0", "239.9.9.4", 19503, /*tsi*/ 1, io);
+
+  EXPECT_FALSE(rx.join_channel("239.9.9.4")) << "already joined at construction";
+  EXPECT_FALSE(rx.leave_channel("239.9.9.5")) << "never joined";
+  EXPECT_EQ(rx.joined_channels().size(), 1u);
+  rx.stop();
+}
+
+
+/* The sending half of the same capability. A multiple rate congestion control building block sends
+   to several channels at different rates; RFC 5775 clause 2.1: "An ALC session comprises multiple
+   channels originating at a single sender". Nothing drives these yet. */
+TEST(TransmitterChannelsTest, ASessionStartsWithOneChannel) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.1", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+  EXPECT_EQ(tx.channel_count(), 1u);
+  EXPECT_EQ(tx.channel_endpoint(0).address().to_string(), "239.9.8.1");
+}
+
+TEST(TransmitterChannelsTest, ChannelsCanBeAddedAndRemoved) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.2", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+
+  const auto first = tx.add_channel("239.9.8.3", 5002);
+  const auto second = tx.add_channel("239.9.8.4", 5004);
+  EXPECT_EQ(first, 1u);
+  EXPECT_EQ(second, 2u);
+  EXPECT_EQ(tx.channel_count(), 3u);
+  EXPECT_EQ(tx.channel_endpoint(2).address().to_string(), "239.9.8.4");
+  EXPECT_EQ(tx.channel_endpoint(2).port(), 5004);
+
+  EXPECT_TRUE(tx.remove_channel(2));
+  EXPECT_EQ(tx.channel_count(), 2u);
+  EXPECT_EQ(tx.channel_endpoint(1).address().to_string(), "239.9.8.3");
+}
+
+TEST(TransmitterChannelsTest, TheConstructedChannelCannotBeRemoved) {
+  boost::asio::io_context io;
+  LibFlute::Transmitter tx("239.9.8.5", 5000, /*tsi*/ 1, /*mtu*/ 1400, /*rate_limit*/ 0, io,
+                           std::nullopt, FileDeliveryTable::FDT_NS_NONE, /*active*/ false);
+  EXPECT_FALSE(tx.remove_channel(0)) << "a session with no channels is not a session";
+  EXPECT_FALSE(tx.remove_channel(7)) << "no such channel";
+  EXPECT_EQ(tx.channel_count(), 1u);
+}
+
+// Whether Content-Length may stand in for a missing Transfer-Length depends on
+// whether the object was content encoded, and on nothing else.
+// RFC 3926 clause 3.4.2: "If the file is not content encoded before transport
+// (and thus the "Content-Encoding" attribute is not used) then the transfer
+// length is the length of the original file, and in this case the
+// "Content-Length" is also the transfer length."
+namespace {
+std::string fdt_with(const std::string& file_attrs) {
+  return std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<FDT-Instance xmlns=\"urn:IETF:metadata:2005:FLUTE:FDT\" Expires=\"4000000000\""
+    " FEC-OTI-FEC-Encoding-ID=\"0\" FEC-OTI-Maximum-Source-Block-Length=\"64\""
+    " FEC-OTI-Encoding-Symbol-Length=\"1400\">"
+    "<File TOI=\"1\" Content-Location=\"obj.bin\" ") + file_attrs + "/></FDT-Instance>";
+}
+
+uint64_t parsed_transfer_length(const std::string& file_attrs) {
+  auto xml = fdt_with(file_attrs);
+  std::vector<char> buf(xml.begin(), xml.end());
+  LibFlute::FileDeliveryTable fdt(1, buf.data(), buf.size());
+  for (const auto& e : fdt.file_entries()) {
+    if (e.toi == 1) return e.fec_oti.transfer_length;
+  }
+  throw std::runtime_error("no entry parsed");
+}
+} // namespace
+
+TEST(EncodedObjectTransferLengthTest, ContentLengthStandsInOnlyWithoutAnEncoding) {
+  // No encoding: the clause authorises the substitution.
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\""), 5000u);
+}
+
+TEST(EncodedObjectTransferLengthTest, AnEncodedObjectDoesNotBorrowContentLength) {
+  // With an encoding the two lengths differ, so borrowing Content-Length would
+  // hand the decoder a length wrong by however much the encoding changed. The
+  // length is left unknown for the object's own EXT_FTI to supply.
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\" Content-Encoding=\"gzip\""), 0u)
+      << "an encoded object's transfer length is not its Content-Length";
+}
+
+TEST(EncodedObjectTransferLengthTest, AnExplicitTransferLengthAlwaysWins) {
+  EXPECT_EQ(parsed_transfer_length("Content-Length=\"5000\" Transfer-Length=\"4096\""), 4096u);
+  EXPECT_EQ(parsed_transfer_length(
+      "Content-Length=\"5000\" Transfer-Length=\"4096\" Content-Encoding=\"gzip\""), 4096u);
+}
+>>>>>>> 291f458 (alc+receiver: carry an encoded object's transfer length where the profile allows it)
